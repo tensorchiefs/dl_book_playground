@@ -34,6 +34,7 @@ left = ggplot(X[epochs,]) +
 left_gif = animate(left,nframes=last_frame)
 #left_gif = animate(left,nframes=last_frame)
 left_gif
+anim_save('grads_n3_lr_2e-3_woff2.gif', left_gif)
 
 m = ggplot(X[epochs,]) +
   geom_segment(aes(x=epoch, xend=epoch+1), y=0, yend=40, size=1.5)+
@@ -42,6 +43,8 @@ m = ggplot(X[epochs,]) +
   theme_classic() +
   transition_manual(epoch)  
 m_gif = animate(m,nframes=last_frame)
+m_gif
+anim_save('losses_n3_lr_2e-3_woff2.gif', m_gif)
 
 right = ggplot(X[epochs,]) +
   geom_point(data=dat, aes(x=x, y=y), col='black', size=3) +
@@ -51,12 +54,13 @@ right = ggplot(X[epochs,]) +
 #right_gif = animate(right, nframes=last_frame,renderer = ffmpeg_renderer())
 right_gif = animate(right, nframes=last_frame)
 right_gif
+anim_save('fit_n3_lr_2e-3_woff2.gif', right_gif)
 
 library(magick)
 a_mgif <- image_read(left_gif)
 b_mgif <- image_read(right_gif)
 m_mgif <- image_read(m_gif)
-new_gif<-image_append(c(a_mgif[1], b_mgif[1]))
+new_gif<-image_append(c(a_mgif[1], m_mgif[1],b_mgif[1]))
 for(i in 2:330){
   combined <- image_append(c(a_mgif[i], m_mgif[i], b_mgif[i]))
   new_gif<-c(new_gif,combined)
