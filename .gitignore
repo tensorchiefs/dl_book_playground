@@ -1,6 +1,8 @@
 
 .idea/*
-*.ipynb
+
+*.ipynb_checkpoints/*
+*.ipynb_checkpoints*
 
 blogdata/*
 
