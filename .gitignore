@@ -9,3 +9,5 @@ blogdata/*
 deerdata/*
 
 flow/test_w.h5
+
+figures/tmp/*
