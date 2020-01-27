@@ -1,0 +1,493 @@
+---
+title: "Boston"
+author: "Beate and Oliver"
+date: "1/16/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Importing the required packages
+```{r}
+library(mlt)
+# source functions which are located in source directory
+# dir()
+source("mlt_utils.R")
+```
+
+## Loading the data
+We scale the y-varible to [0,1]
+```{r}
+data("BostonHousing2", package = "mlbench")
+dat=BostonHousing2
+#str(dat)  #506 obs. of  19 variables
+names(dat)
+dat$y_obs = dat$medv
+dat$y_scale = utils_scale(dat$y_obs)
+sum(dat$medv**2) # 299626.3 to compare with BH data in paper
+```
+
+
+## Defining the model
+We set up the formula for the model:
+```{r}
+#fm_large = (y_scale ~ crim + zn + indus + chas + nox + rm + age + dis + rad + tax + ptratio + b + lstat)
+#fm_small = (y_scale ~  rm + lstat) #lm log lik 346
+fm_uni = (y_scale ~  rm)
+(fm = fm_uni)
+is_univariate = TRUE
+sum(dat$rm**2)  # 20234.6 to compare with BH data in paper
+```
+
+## Baseline Linear Model
+```{r}
+fit_lm = lm(fm, data=dat)
+fit_lm$coef
+logLik(fit_lm)  # the larger the better
+```
+
+## Linear Transformation model 
+
+A **linear** transformation model features a linear schift $-\sum_i \beta_i x_i$ of a typically non-linear tranformation $h(y)$ of the response $Y$.
+
+* $F_{Y{|X=x}}(y)=F_z(h_{Y}(y)-\sum_i \beta_i x_i)$
+* $h_Y(y)$, the unconditional baseline transformation, is modeled by an linear combinations of $M+1$ Berstein functions. $h_Y(y) = \sum_{m=0}^{M} \vartheta_m f_{be(m+1,M-m+1)}(\tilde y) / M+1$ (see MLT paper page 12) 
+* $\tilde y$ is scaled to $[0,1]$
+
+## Using MLT functionality
+
+### Variable and Model definition and fit
+```{r}
+nb = 3  # order defining the Number of Bernstein fct in polynom
+# specify a numeric variable with data in [0,1] and principle bounds [0,Inf] 
+var_y <- numeric_var("y_scale", support = c(0, 1), bounds = c(0, 1))
+# what is done with the bound information (default bounds c(-INF, INF)
+
+# set up monoton increasing polynomial of order nb with Bernstein basis function
+bb <- Bernstein_basis(var_y, order=nb, ui="increasing")
+
+# set up grid in interval supp+add -> gives data.frame with col y_scale
+y_grid <- as.data.frame(mkgrid(bb, n = 100))
+
+# set up model for mlt
+ctm = ctm(bb, shift=fm[-2L], data=dat, todistr="Normal") 
+# fm[-2L] defnes the basis function for the shift term h_y(y) in h(y|x)=h_y(y)+h_x(x) 
+# the intercept is included in the baseline-trafo h_y(y) (not in linear predictor h_x(x))
+```
+
+Fit of the model:
+
+```{r}
+# fit the mlt model
+mlt_fit <- mlt(ctm, data = dat, verbose=TRUE)
+
+(log_lik_mlt = logLik(mlt_fit))  #  df = nr-theta + nr-beta
+# compare to logLik of the baseline model - the larger the better
+```
+
+### (Unconditional) baseline transformation function $h_Y(y)$
+
+Get the coefficients of the trafo h from the mlt fit:
+```{r}
+## h(y|x) = h_y(y) + h_x(x), h_y(y) is Bernstein-polynomial, h_x(x) is linear predictor
+## now we have coef theta for y-trafo and beta for linear predictor and h
+( mlt_fit$coef )
+
+( theta = mlt_fit$coef[1:(nb+1)] )
+( beta = mlt_fit$coef[(nb+2):length(mlt_fit$coef)] )
+```
+
+Use mlt functionality to determine "baseline" trafo h_y and plot it:
+```{r}
+h_y_mlt = predict(bb, newdata=y_grid, coef=theta, type="trafo")
+# draw trafo derived with mlt functionality
+plot(y_grid$y_scale, h_y_mlt, type = "l",
+     main="mlt-predicted baseline trafo h_y")
+```
+
+
+
+### Get the conditional transformation function $h(y|x)$
+The linear transformation function is given by the unconditional transformation function $h_y(y)$ shifted by the linear predictor:
+
+$h(y|x)=h_{Y}(y)-\sum_i \beta_i x_i$
+
+
+The conditional trafo for some observations 
+```{r}
+h_mlt = predict(mlt_fit, newdata=dat, q=y_grid$y_scale,type='trafo')
+
+  set.seed(3)
+  idx = sample(1:ncol(h_mlt))[1:10]
+  m = max(h_mlt[,idx])
+  plot(y_grid$y_scale, h_mlt[,idx[1]], type='l',col='red', ylim=c(-5,5),
+       main="mlt-predicted trafo h(y|x) for different x")
+  for (i in idx){
+    lines(y_grid$y_scale, h_mlt[,i], col=i)  
+  }
+```
+
+This trafo $h(y|x)$ is used automatically when using the mlt predict with *type='distribution'* or *type='density'*:
+
+The conditional CDF for some observations 
+```{r}
+  #yy = seq(0,1,length.out=100)
+  F_mlt = predict(mlt_fit, newdata=dat, q=y_grid$y_scale,type='distribution')
+
+  set.seed(3)
+  idx = sample(1:ncol(F_mlt))[1:10]
+  m = max(F_mlt[,idx])
+  plot(y_grid$y_scale, F_mlt[,idx[1]], type='l',col='red', ylim=c(0,m),
+       main="mlt-predicted CCDF for some picked predictors")
+  for (i in idx){
+    lines(y_grid$y_scale, F_mlt[,i], col=i)  
+  }
+```
+
+The conditional PDF for some observations
+```{r}
+  f_mlt = predict(mlt_fit, newdata=dat,  q=y_grid$y_scale, type='density')
+  
+  q_mlt = predict(mlt_fit, newdata=dat, 
+                  prob=c(0.025,0.25,0.5, 0.75,0.975), type='quantile')
+  q_mlt = t(q_mlt)
+  #q_mlt = matrix(q_mlt$exact, ncol = 5, byrow = TRUE)
+  set.seed(3)
+  idx = sample(1:ncol(f_mlt))[1:10]
+  m = max(f_mlt[,idx])
+  plot(y_grid$y_scale, f_mlt[,idx[1]], type='l',col='red', ylim=c(0,4),
+       main="mlt-predicted CPD for some picked predictors")
+  for (i in idx){
+    lines(y_grid$y_scale, f_mlt[,i], col=i)  
+  }
+```
+
+
+## Using our transformation functions 
+
+### Get the unconditional transformation function $h_y(y)$ and compare it with mlt 
+
+```{r}
+h_y=h(theta,y_grid$y_scale)
+plot(y_grid$y_scale, h_y, col="red", main="our fct (red circles) mlt (blue)")  
+lines(y_grid$y_scale, h_y_mlt, type = "l", col="blue", lty=2, lwd=2)
+```
+
+
+### Get the conditional transformation function $h(y|x)$
+
+We predict for each predictor value a whole distribution (y|x). The family of the distribution is not known, but the conditional transformation function $h(y|x)$ allows us to transform $(y|x) \rightarrow (z|x)=h(y|x)$ 
+To get $h(y|x)$ we add the linear predictor $m(x)$ to the unconditional baseline function $h_Y(y)$ yielding:
+$h(y|x)=h_{Y}(y)-\sum_i \beta_i x_i)$
+
+```{r}
+# we use our unconditional baseline trafo
+h_y = h(theta, y_grid$y_scale)
+# for the linear predictor we use the beta-parameter from the mlt fit 
+beta
+mm = model.matrix(fm, dat) # Model matrix
+#str(mm)
+mm = mm[,-1] # model matrix w/o intercept
+m_x =  mm %*%  matrix(beta, ncol=1) #Contains linear predictor for each observation
+```
+
+Let's compute for each  $y$-value of the y_grid the transformed $z=h(y|x)$. We do that for each predictor value (= each row in the design matrix): 
+
+```{r}
+  F_our = z = matrix(NA, nrow=length(y_grid$y_scale), ncol=nrow(dat))
+  # lets go through all predictor-values of the design matrix
+  # and compute the corresponding z-vector (z|x)=h(y|x) 
+  for (i in 1:nrow(dat)) { #
+    z[,i] = (h_y + m_x[i])
+  }
+```
+
+
+
+### Calculating CCDF and compare it with mlt  
+
+We now use $(z|x)=h(y|x)$ to determine the conditional cumulative distribution function (CCDF) by $F_Y(y)|_x=F_Z(z)|_x$, where $F_Z$ ist the cumulative distribution of a Standard-Normal.
+
+```{r}
+# compute the CCDF
+F_our = pnorm(z)
+```
+
+For each predictor value, we predict a whole distribution. This can be visualized by the CCDF $F_Y(y)|_x$ vs each possilbe $y$ of y_grid. We pick some predictor values and compare the corresponding CCDF which we got with our functions with the corresponding CCDF which we got with pure mlt-functionalities: 
+
+```{r}
+  plot(y_grid$y_scale, F_our[,1], main='Compare our (black) with mlt (blue) CCPD functions')
+  points(y_grid$y_scale, F_our[,2])
+  lines(y_grid$y_scale, F_mlt[,1], col='blue')
+  lines(y_grid$y_scale, F_mlt[,2], col='blue')
+```
+
+
+### Calculating CPD  and compare it with mlt 
+
+We now use $(z|x)=h(y|x)$ and the derivation of the baseline traf $h_Y'(y)$ to determine the conditional probability distribution  (CPD) by $f_Y(y)|_x=f_Z(z)|_x \cdot h_y'(y)$, where $f_Z$ ist the density function of a Standard-Normal.
+
+```{r}
+# Compute the CPD
+f_our = dnorm(z)*h_dash(theta, y_grid$y_scale)  
+```  
+
+Pick some predictor values and plot the corresponding CPD which we got with our functions along with the CPD which we got with mlt:
+```{r}
+  idx = sample(1:ncol(f_mlt))[1:10]
+  m1 = max(f_mlt[,idx])
+  plot(y_grid$y_scale, f_mlt[,idx[1]], type='l',col='blue', ylim=c(0,m1), 
+       main='Compare our (black) with mlt (blue)CPD functions')
+  points(y_grid$y_scale, f_our[,idx[1]])
+  for (i in idx){
+    points(y_grid$y_scale, f_our[,i])
+    lines(y_grid$y_scale, f_mlt[,i], col='blue')
+  }
+```
+
+### Compare predicted CPD with observed outcomes
+
+For some picked predictor values $x_i$ we determine the CPD $f_Y(y)|_{x_i}=f_Z(z)|_{x_i} \cdot h_y'(y)$ which we plot vs the possible $y$-values on the original $y$-scale. The position of the observed outcome value is indicated by a solid vertical line.  
+
+```{r, echo=TRUE}
+  # pick some predictor values (=rows in the designmatrix)
+  idx = 1:3
+  # get observed outcomes on the original scales
+  y_obs = utils_back_scale(dat[idx,]$y_scale, dat$y_obs)
+  x_obs = dat$rm[idx]
+  # dens was predicted for scale y, get it back to orignal sclae
+  pred_cpd = utils_back_scale(f_mlt[,idx], dat$y_obs)
+  pred_cpd = t(pred_cpd)
+  y_grid$y_unscaled = utils_back_scale(y_grid$y_scale, dat$y_obs)
+
+  plot(y_grid$y_unscaled, pred_cpd[1,], type='l', 
+       main="predicted CPD of some picked observations, and position of observation", cex.main=0.8)
+  abline(v=y_obs[1])
+  #points(utils_back_scale(q_mlt[1,3], dat$y_obs),0, pch=16)
+  for (i in 2:length(idx)){
+    lines(y_grid$y_unscaled,pred_cpd[i,], col=i)  
+    abline(v=y_obs[i],col=i)
+    #points(utils_back_scale(q_mlt[i,3], dat$y_obs),0,col=i,pch=16)
+  }
+```
+
+Lets plot the medians along with the predicted CPDs
+
+```{r, echo=FALSE}
+  # pick some predictor values (=rows in the designmatrix)
+  idx = 1:3
+  # get observed outcomes on the original scales
+  y_obs = utils_back_scale(dat[idx,]$y_scale, dat$y_obs)
+  x_obs = dat$rm[idx]
+  # dens was predicted for scale y, get it back to orignal sclae
+  pred_cpd = utils_back_scale(f_mlt[,idx], dat$y_obs)
+  pred_cpd = t(pred_cpd)
+  y_grid$y_unscaled = utils_back_scale(y_grid$y_scale, dat$y_obs)
+
+  # plot(y_grid$y_unscaled, pred_cpd[1,], type='l', 
+  #      main="some predicted CPD and their median values", cex.main=0.8)
+  # 
+  plot(y_grid$y_unscaled, f_mlt[,1]/diff(range(y_grid$y_unscaled)), type='l', 
+       main="some predicted CPD and their median values", cex.main=0.8)
+  #abline(v=y_obs[1])
+  abline(v=utils_back_scale(q_mlt[1,3], dat$y_obs),lty=2)
+  #points(utils_back_scale(q_mlt[1,3], dat$y_obs),0, pch=16)
+  for (i in 2:length(idx)){
+    lines(y_grid$y_unscaled,pred_cpd[i,], col=i)  
+    abline(v=utils_back_scale(q_mlt[i,3], dat$y_obs),col=i,lty=2)
+  }
+```
+
+
+### Log Likelihood with our functions
+
+We can now use the results from our functions to compute the likelihood of the training data set $(x_i, y_i), i=1,...,n$: For each predictor $x_i$ we detremine the predicted CPD  to get the likelihood at the position of the observed outcome $y_i$ by $f_Y(y_i)|_{x_i}=f_Z(z_i)|_{x_i} \cdot h_y'(y_i)$. 
+
+The log-Likelihood is given by 
+$logLik=\sum_i log(f_Z(h(y_i|x_i))+\sum_i log(h_Y'(y_i))$
+
+```{r}
+# compute first term in logLik
+s1 = sum(log(dnorm(
+     h(theta, dat$y_scale) + m_x
+     )))
+# compute first term in logLik
+s2 = sum(log(h_dash(theta, dat$y_scale)))
+log_lik_ours = s1+s2
+log_lik_ours  # logLik computed with our functions
+log_lik_mlt   # logLik computed with pure mlt functions
+```
+
+## Interpretation of the beta-parameter
+
+In a univariate (not probabilistic linear model $E(y|x)=\beta_0 + \beta_1 \cdot x$, we model for a ginven predictor value $x$ only the expected value of the outcome $E(y|x)$ and the parameter $\beta_1$ has the following interpretation:
+If x increases by one unit, then the expected value of $y$ increases by $\beta_1$
+
+Here we do probabilistic modeling and predict for a ginven predictor value $x$ not only the expected value $E(y|x)$ but a whole distribtion, which we can visualize as CPD.
+
+Here we work with a **linear** transformation model that features a linear schift $-\sum_i \beta_i x_i$ of a typically non-linear tranformation $h(y)$ of the response $Y$.
+
+* $F_{Y{|X=x}}(y)=F_z(h_{Y}(y)-\sum_i \beta_i x_i)$
+
+**Question:** What is the interpretation of the $\beta$ in the linear predictor part of the transformation model.
+
+Let's have a look at the predictions. For some picked predictor values $x_i$ we determine the CPD $f_Y(y)|_{x_i}=f_Z(z)|_{x_i} \cdot h_y'(y)$.
+
+
+```{r, echo=FALSE, results='hide'}
+  dat$median = utils_back_scale(q_mlt[,3],dat$y_obs)
+  dat$q025 = utils_back_scale(q_mlt[,1],dat$y_obs)
+  dat$q975 = utils_back_scale(q_mlt[,5],dat$y_obs)
+   
+  summary(lm(median~rm, data=dat))  
+
+  set.seed(3)
+  idx = sample(1:nrow(dat))[1:150]
+  y_obs = utils_back_scale(dat[idx,]$y_scale, dat$y_obs)
+  x_obs = dat$rm[idx]
+  pred_cpd = utils_back_scale(t(f_mlt[,idx]), dat$y_obs)
+  
+  x = BostonHousing2$rm[idx[1]]
+  plot(x+pred_cpd[1,]/400, y_grid$y_unscaled, type='l', xlim=range(BostonHousing2$rm),
+       xlab="average room number", ylab="median price", cex.main=0.8,
+       main="Predicted CPDs their medians and 95% prediction intervals")
+  points(x,y_obs[1],col='black', pch=".")
+  
+  lines(median~rm, data=dat[order(dat$rm),], type="l")
+  lines(q025~rm, data=dat[order(dat$rm),], type="l", lty=2)
+  lines(q975~rm, data=dat[order(dat$rm),], type="l", lty=2)
+  
+  points(x, utils_back_scale(q_mlt[idx[1],3],dat$y_obs))
+  
+  for (i in 2:length(idx)){
+    x = BostonHousing2$rm[idx[i]]
+    #print(x)
+    lines(x+pred_cpd[i,]/400, y_grid$y_unscaled, col=i)
+    points(x,utils_back_scale(q_mlt[idx[i],3],dat$y_obs),col=i)
+    points(x,y_obs[i],col='black', pch=".")
+  }
+  
+```
+
+
+You might ask: **Why do we get completly different densities and not only shifted densities?**  
+The answer is, that the parameter $\beta$ in  $\beta \cdot x$ (we have only one predictor x in this model) defines only a shift on the **expedted value of $h_y(y)$** . 
+
+Let's plot $E(h_y(y))$ vs x. In our case x is rm (average number of rooms) and y is the median price. We approximate the expected value by the weighted sum over the grid of the target variable, where the weights are given by $f_Y(y)=f_Z(h(y|x)\cdot h'(y)$ :
+
+$E(h(y))=\sum_{i=1}^{100}h(y_i)\cdot f_Y(y_i)$
+
+```{r}
+# check if the CPD of one predictor integrates to 1
+idx=500
+pred_cpd = f_mlt[,idx]  # on interval [0,1]
+plot(y_grid$y_scale, pred_cpd, type='l', 
+       main="predicted CPD", cex.main=0.8)
+
+sum(pred_cpd*1/100)
+
+span_orig=diff(range(y_grid$y_unscaled))
+
+sum(pred_cpd*1/100)
+
+plot(y_grid$y_unscaled, pred_cpd/span_orig, type='l', 
+       main="predicted CPD", cex.main=0.8)
+
+# area under density is given by integration
+# approx it by a sum, where cpd-value has to bi multiplied by length of step.
+sum(pred_cpd/span_orig*span_orig/100)
+
+
+```
+
+
+```{r}
+par(mfrow=c(1,1))
+h_y=h(theta, y_grid$y_scale)
+plot(y_grid$y_scale, h_y, col="red", main="h(y) with our fct (red circles) mlt (blue)")  
+lines(y_grid$y_scale, h_y_mlt, type = "l", col="blue", lty=2, lwd=2)
+
+idx=100
+pred_cpd = f_mlt[,idx]  # on interval [0,1]
+plot(y_grid$y_scale, pred_cpd, type='l', 
+       main="predicted CPD", cex.main=0.8)
+
+# expected value of h(y) on [0,1] scale
+mean(h_y_mlt)  # 8.686092 for uniform CPD
+
+# for CPD with peak at position <0.5 we expect smaller values
+( e_h_y=sum(h_y_mlt*pred_cpd*1/100) )  # is 
+
+# for all obs
+pred_cpd = f_mlt  # on interval [0,1]
+
+# for CPD with peak at position <0.5 we expect smaller values
+tmp=h_y_mlt*pred_cpd*1/100
+e_h_y=apply(tmp,2,sum)
+
+plot(dat$rm, e_h_y)
+
+
+```
+
+```{r, echo=FALSE}
+  # # pick some predictor values (=rows in the designmatrix)
+  # idx = 1:3
+  # # get observed outcomes on the original scales
+  # y_obs = utils_back_scale(dat[idx,]$y_scale, dat$y_obs)
+  # x_obs = dat$rm[idx]
+  # pred_cpd = utils_back_scale(t(f_mlt[,idx]), dat$y_obs)
+  # h_y_mlt # always the same 100 values
+  # 
+  # #e1=h_y_mlt %*% pred_cpd[,1]
+  # 
+  #  plot(y_grid$y_unscaled, pred_cpd[1,], type='l', 
+  #      main="some predicted CPD ", cex.main=0.8)
+  # 
+  
+  # 
+  # #abline(v=y_obs[1])
+  # abline(v=utils_back_scale(q_mlt[1,3], dat$y_obs),lty=2)
+  # #points(utils_back_scale(q_mlt[1,3], dat$y_obs),0, pch=16)
+  # for (i in 2:length(idx)){
+  #   lines(y_grid$y_unscaled,pred_cpd[i,], col=i)  
+  #   abline(v=utils_back_scale(q_mlt[i,3], dat$y_obs),col=i,lty=2)
+  # }
+```
+
+
+## Full model
+
+
+```{r}
+fm_large = (y_scale ~ crim + zn + indus + chas + nox + rm + age + dis + rad + tax + ptratio + b + lstat)
+fm = fm_large
+fit_lm = lm(fm, data=dat)
+logLik(fit_lm)  
+```
+
+
+```{r}
+# nb = 8  # order defining the Number of Bernstein fct in polynom
+# # specify a numeric variable with data in [0,1] and principle bounds [0,Inf] 
+# var_y <- numeric_var("y_scale", support = c(0, 1), bounds = c(0, Inf))
+# # set up monoton increasing polynomial of order nb with Bernstein basis function
+# bb <- Bernstein_basis(var_y, order=nb, ui="increasing")
+# # set up grid in interval supp+add
+# y <- as.data.frame(mkgrid(bb, n = 100))
+# 
+# # set up model for mlt
+# ctm = ctm(bb, shift=fm[-2L], data=dat, todistr="Normal") 
+# #ctm = ctm(bb, data=dat, todistr="Normal") #unconditional
+# 
+# # fm[-2L] defnes the basis function for the shift term h_y(y) in h(y|x)=h_y(y)+h_x(x) 
+# # the intercept is included in the baseline-trafo h_y(y) (not in linear predictor h_x(x))
+# 
+# # fit the mlt model
+# mlt_fit <- mlt(ctm, data = dat, verbose=TRUE)
+# 
+# (log_lik_mlt = logLik(mlt_fit))  #  df = nr-theta + nr-beta
+```
+
